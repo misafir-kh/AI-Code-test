@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
 // Struktur eines GitHub-Repositories
 interface GitHubRepository {
@@ -12,34 +12,91 @@ interface GitHubRepository {
   html_url: string;
 }
 
-// Diese Komponente stellt den Hauptbereich (Body) des Workspaces dar.
+// Struktur eines gespeicherten Repositorys aus der Datenbank
+interface SavedRepository {
+  id: string;
+  userId: string;
+  repoId: number;
+  name: string;
+  fullName: string;
+  private: boolean;
+  htmlUrl: string;
+  description: string | null;
+  owner: string;
+  createdAt: string;
+}
+
 function WorkspaceBody() {
-  // Das sind Platzhalter-Credits. Später holen wir die echten aus der Datenbank.
+  // Platzhalter-Credits
   const credits = 2000;
 
-  // Zustand für das Repository-Dialogfenster
+  // Dialog und GitHub-Repositories
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-
-  // Zustand für die geladenen GitHub-Repositories
   const [repositories, setRepositories] = useState<GitHubRepository[]>([]);
 
-  // Zustand für das ausgewählte Repository
+  // Ausgewähltes Repository
   const [selectedRepository, setSelectedRepository] =
     useState<GitHubRepository | null>(null);
 
-  // Zustände für Ladeanzeige und Fehlermeldungen
+  // Lade- und Fehlerzustände
   const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
+  const [saveMessage, setSaveMessage] = useState('');
 
-  // GitHub-Repositories laden und das Dialogfenster öffnen
+  // Bereits gespeicherte Repositories beim Öffnen der Seite laden
+  useEffect(() => {
+    async function loadSavedRepositories() {
+      try {
+        const response = await fetch('/api/repositories', {
+          cache: 'no-store',
+        });
+
+        if (!response.ok) {
+          if (response.status !== 401) {
+            console.error(
+              'Gespeicherte Repositories konnten nicht geladen werden.'
+            );
+          }
+          return;
+        }
+
+        const savedRepositories: SavedRepository[] = await response.json();
+
+        if (savedRepositories.length > 0) {
+          const repository = savedRepositories[0];
+
+          setSelectedRepository({
+            id: repository.repoId,
+            name: repository.name,
+            full_name: repository.fullName,
+            description: repository.description,
+            private: repository.private,
+            html_url: repository.htmlUrl,
+          });
+        }
+      } catch (err) {
+        console.error(
+          'Fehler beim Laden gespeicherter Repositories:',
+          err
+        );
+      }
+    }
+
+    loadSavedRepositories();
+  }, []);
+
+  // GitHub-Repositories laden und den Dialog öffnen
   async function openRepositoryDialog() {
     setIsDialogOpen(true);
     setIsLoading(true);
     setError('');
+    setSaveMessage('');
 
     try {
-      // Repositories über unsere bestehende API-Route abrufen
-      const response = await fetch('/api/github/repos');
+      const response = await fetch('/api/github/repos', {
+        cache: 'no-store',
+      });
 
       if (!response.ok) {
         throw new Error(
@@ -50,7 +107,6 @@ function WorkspaceBody() {
       }
 
       const data: GitHubRepository[] = await response.json();
-
       setRepositories(data);
     } catch (err) {
       setError(
@@ -63,53 +119,89 @@ function WorkspaceBody() {
     }
   }
 
-  // Repository auswählen und Dialog schließen
-  function selectRepository(repository: GitHubRepository) {
-    setSelectedRepository(repository);
-    setIsDialogOpen(false);
+  // Repository in der Datenbank speichern
+  async function selectRepository(repository: GitHubRepository) {
+    if (isSaving) {
+      return;
+    }
+
+    setIsSaving(true);
+    setError('');
+    setSaveMessage('');
+
+    try {
+      const owner = repository.full_name.split('/')[0];
+
+      const response = await fetch('/api/repositories', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ...repository,
+          owner,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          result.error ?? 'Das Repository konnte nicht gespeichert werden.'
+        );
+      }
+
+      setSelectedRepository(repository);
+      setIsDialogOpen(false);
+      setSaveMessage(
+        result.message === 'Repository bereits gespeichert'
+          ? 'Dieses Repository ist bereits gespeichert.'
+          : 'Repository erfolgreich gespeichert.'
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Ein unerwarteter Fehler ist aufgetreten.'
+      );
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   return (
-    // Der Haupt-Container für den Inhalt.
-    // max-w-4xl begrenzt die Breite, mx-auto zentriert ihn, mt-10 fügt Abstand nach oben hinzu.
-    <div className="max-w-4xl mx-auto mt-10">
-
-      {/* Oberer Bereich: Titel und Anzeige der verbleibenden Credits */}
-      <div className="flex justify-between items-center mb-10">
-
-        {/* Hauptüberschrift des Workspaces */}
+    <div className="mx-auto mt-10 max-w-4xl">
+      {/* Überschrift und Credits */}
+      <div className="mb-10 flex items-center justify-between">
         <h2 className="text-4xl font-bold">Workspace</h2>
 
-        {/* Visuelle Box für die Credit-Anzeige mit hellblauem Hintergrund */}
-        <div className="flex items-center gap-2 bg-blue-50 px-4 py-2 rounded-lg border border-blue-100">
+        <div className="flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-4 py-2">
           <span className="text-sm text-gray-500">
             Remaining Credits:
           </span>
-
-          {/* Dynamischer Wert für die Credits */}
           <span className="font-bold text-blue-700">{credits}</span>
         </div>
       </div>
 
-      {/* Sektion zum Verbinden eines GitHub-Accounts */}
-      <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-100 flex flex-col items-center justify-center text-center mt-8">
-
-        <h3 className="text-2xl font-semibold mb-2">
-          Connect GitHub & Add Repository
+      {/* GitHub-Verbindung und Repository-Auswahl */}
+      <div className="mt-8 flex flex-col items-center justify-center rounded-xl border border-gray-100 bg-white p-8 text-center shadow-sm">
+        <h3 className="mb-2 text-2xl font-semibold">
+          Connect GitHub &amp; Add Repository
         </h3>
 
-        <p className="text-gray-500 mb-6">
-          Verbinde deinen Account, um KI-gestützte Tests für deinen Code zu generieren.
+        <p className="mb-6 text-gray-500">
+          Verbinde deinen Account, um KI-gestützte Tests für deinen Code zu
+          generieren.
         </p>
 
-        {/* Button zum Öffnen der Repository-Auswahl */}
         <button
           type="button"
           onClick={openRepositoryDialog}
-          className="bg-black hover:bg-gray-800 text-white font-medium py-3 px-6 rounded-lg transition-colors flex items-center gap-2"
+          disabled={isSaving}
+          className="flex items-center gap-2 rounded-lg bg-black px-6 py-3 font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <svg
-            className="w-5 h-5"
+            className="h-5 w-5"
             fill="currentColor"
             viewBox="0 0 24 24"
             aria-hidden="true"
@@ -120,14 +212,32 @@ function WorkspaceBody() {
               clipRule="evenodd"
             />
           </svg>
-
           + Add Repository
         </button>
 
-        {/* Anzeige des ausgewählten Repositories */}
+        {/* Speicherstatus */}
+        {isSaving && (
+          <p className="mt-4 text-sm text-gray-500" role="status">
+            Repository wird gespeichert ...
+          </p>
+        )}
+
+        {saveMessage && (
+          <p className="mt-4 text-sm text-green-700" role="status">
+            {saveMessage}
+          </p>
+        )}
+
+        {error && !isDialogOpen && (
+          <p className="mt-4 text-sm text-red-600" role="alert">
+            {error}
+          </p>
+        )}
+
+        {/* Ausgewähltes Repository */}
         {selectedRepository && (
           <div className="mt-6 w-full rounded-lg border border-gray-200 p-4 text-left">
-            <p className="text-sm text-gray-500 mb-1">
+            <p className="mb-1 text-sm text-gray-500">
               Selected Repository
             </p>
 
@@ -140,28 +250,34 @@ function WorkspaceBody() {
               {selectedRepository.full_name}
             </a>
 
-            <p className="text-sm text-gray-500 mt-1">
-              {selectedRepository.private ? 'Private repository' : 'Public repository'}
+            <p className="mt-1 text-sm text-gray-500">
+              {selectedRepository.private
+                ? 'Private repository'
+                : 'Public repository'}
             </p>
           </div>
         )}
       </div>
 
-      {/* Dialogfenster für die GitHub-Repository-Auswahl */}
+      {/* Repository-Auswahldialog */}
       {isDialogOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={() => setIsDialogOpen(false)}
+          onClick={() => {
+            if (!isSaving) {
+              setIsDialogOpen(false);
+            }
+          }}
         >
           <div
             role="dialog"
             aria-modal="true"
             aria-labelledby="repository-dialog-title"
-            className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[80vh] flex flex-col"
+            className="flex max-h-[80vh] w-full max-w-lg flex-col rounded-xl bg-white shadow-xl"
             onClick={(event) => event.stopPropagation()}
           >
             {/* Dialog-Kopfzeile */}
-            <div className="flex justify-between items-center p-5 border-b">
+            <div className="flex items-center justify-between border-b p-5">
               <h3
                 id="repository-dialog-title"
                 className="text-xl font-semibold"
@@ -172,61 +288,65 @@ function WorkspaceBody() {
               <button
                 type="button"
                 onClick={() => setIsDialogOpen(false)}
-                className="text-gray-500 hover:text-black text-2xl"
+                disabled={isSaving}
+                className="text-2xl text-gray-500 hover:text-black disabled:opacity-50"
                 aria-label="Dialog schließen"
               >
                 &times;
               </button>
             </div>
 
-            {/* Inhalt des Dialogfensters */}
-            <div className="p-5 overflow-y-auto">
-
-              {/* Ladeanzeige */}
+            {/* Dialog-Inhalt */}
+            <div className="overflow-y-auto p-5">
               {isLoading && (
-                <p className="text-gray-500 text-center py-6">
+                <p className="py-6 text-center text-gray-500">
                   Loading repositories...
                 </p>
               )}
 
-              {/* Fehlermeldung */}
               {!isLoading && error && (
-                <div className="text-red-600 text-sm bg-red-50 rounded-lg p-4">
+                <div className="rounded-lg bg-red-50 p-4 text-sm text-red-600">
                   <p>{error}</p>
 
                   <button
                     type="button"
                     onClick={openRepositoryDialog}
-                    className="mt-3 underline font-medium"
+                    className="mt-3 font-medium underline"
                   >
                     Try again
                   </button>
                 </div>
               )}
 
-              {/* Liste der Repositories */}
               {!isLoading && !error && repositories.length > 0 && (
                 <div className="space-y-3">
                   {repositories.map((repository) => (
                     <button
                       key={repository.id}
                       type="button"
+                      disabled={isSaving}
                       onClick={() => selectRepository(repository)}
-                      className="w-full text-left border rounded-lg p-4 hover:border-blue-500 hover:bg-blue-50 transition-colors"
+                      className="w-full rounded-lg border p-4 text-left transition-colors hover:border-blue-500 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <div className="flex justify-between items-start gap-3">
-                        <span className="font-semibold break-all">
+                      <div className="flex items-start justify-between gap-3">
+                        <span className="break-all font-semibold">
                           {repository.full_name}
                         </span>
 
-                        <span className="text-xs text-gray-500 shrink-0">
+                        <span className="shrink-0 text-xs text-gray-500">
                           {repository.private ? 'Private' : 'Public'}
                         </span>
                       </div>
 
                       {repository.description && (
-                        <p className="text-sm text-gray-500 mt-2">
+                        <p className="mt-2 text-sm text-gray-500">
                           {repository.description}
+                        </p>
+                      )}
+
+                      {isSaving && (
+                        <p className="mt-2 text-sm text-gray-500">
+                          Saving...
                         </p>
                       )}
                     </button>
@@ -234,20 +354,20 @@ function WorkspaceBody() {
                 </div>
               )}
 
-              {/* Anzeige, wenn keine Repositories gefunden wurden */}
               {!isLoading && !error && repositories.length === 0 && (
-                <p className="text-gray-500 text-center py-6">
+                <p className="py-6 text-center text-gray-500">
                   No repositories found.
                 </p>
               )}
             </div>
 
             {/* Dialog-Fußzeile */}
-            <div className="p-4 border-t flex justify-end">
+            <div className="flex justify-end border-t p-4">
               <button
                 type="button"
                 onClick={() => setIsDialogOpen(false)}
-                className="px-4 py-2 rounded-lg border hover:bg-gray-100"
+                disabled={isSaving}
+                className="rounded-lg border px-4 py-2 hover:bg-gray-100 disabled:opacity-50"
               >
                 Cancel
               </button>
