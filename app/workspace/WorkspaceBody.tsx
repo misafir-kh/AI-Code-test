@@ -27,8 +27,6 @@ interface SavedRepository {
 }
 
 function WorkspaceBody() {
-  // Platzhalter-Credits
-  const credits = 2000;
 
   // Dialog und GitHub-Repositories
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -171,16 +169,13 @@ function WorkspaceBody() {
 
   return (
     <div className="mx-auto mt-10 max-w-4xl">
-      {/* Überschrift und Credits */}
-      <div className="mb-10 flex items-center justify-between">
-        <h2 className="text-4xl font-bold">Workspace</h2>
-
-        <div className="flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-4 py-2">
-          <span className="text-sm text-gray-500">
-            Remaining Credits:
-          </span>
-          <span className="font-bold text-blue-700">{credits}</span>
-        </div>
+      <div className="mb-8">
+        <h2 className="mt-2 text-3xl font-bold tracking-tight text-gray-900">
+          Workspace
+        </h2>
+        <p className="mt-2 text-gray-600">
+          Manage your repositories and prepare them for AI-powered testing.
+        </p>
       </div>
 
       {/* GitHub-Verbindung und Repository-Auswahl */}
@@ -190,8 +185,7 @@ function WorkspaceBody() {
         </h3>
 
         <p className="mb-6 text-gray-500">
-          Verbinde deinen Account, um KI-gestützte Tests für deinen Code zu
-          generieren.
+          Connect your GitHub account to add repositories and generate AI-powered tests for your code.
         </p>
 
         <button
@@ -218,7 +212,7 @@ function WorkspaceBody() {
         {/* Speicherstatus */}
         {isSaving && (
           <p className="mt-4 text-sm text-gray-500" role="status">
-            Repository wird gespeichert ...
+            Saving repository...
           </p>
         )}
 
@@ -356,7 +350,7 @@ function WorkspaceBody() {
 
               {!isLoading && !error && repositories.length === 0 && (
                 <p className="py-6 text-center text-gray-500">
-                  No repositories found.
+                  No repositories found!
                 </p>
               )}
             </div>

@@ -38,7 +38,7 @@ function WorkspaceLayout({ children }: { children: React.ReactNode }) {
           
           {/* Credit-Anzeige (Blauer Kasten) */}
           <div className="flex items-center justify-between bg-blue-100 text-blue-800 px-3 py-1 rounded-lg">
-            <h2 className="text-sm font-semibold">Remaining Credits: 2000</h2>
+            <h2 className="text-sm font-semibold">Credits: 2000</h2>
           </div>
           
           {/* Dein interaktives Clerk-Profilbild */}
