@@ -1,4 +1,6 @@
 // 1. IMPORTE
+// wir importieren "Link" von Next.js, damit wir auf andere Seiten verlinken können.
+import Link from 'next/link';
 // Wir holen den "UserButton" aus dem Clerk-Paket. Das ist das fertige Profilbild-Menü.
 import { UserButton } from '@clerk/nextjs';
 // Wir importieren React, damit Next.js versteht, dass dies eine UI-Komponente ist.
@@ -25,13 +27,28 @@ function WorkspaceLayout({ children }: { children: React.ReactNode }) {
         </div>
         
         {/* MITTE: Die Menüpunkte */}
-        {/* "gap-5" macht Abstand zwischen den Wörtern. */}
-        <ul className="flex gap-5 font-medium text-gray-700">
-          {/* "hover:text-blue-600" lässt die Wörter blau werden, wenn die Maus darüberfährt. */}
-          <li className="cursor-pointer hover:text-blue-600">Workspace</li>
-          <li className="cursor-pointer hover:text-blue-600">Pricing</li>
-          <li className="cursor-pointer hover:text-blue-600">Support</li>
-        </ul>
+        <nav aria-label="Hauptnavigation">
+          <ul className="flex gap-5 font-medium text-gray-700">
+            <li>
+              <a
+                href="/api/github"
+                className="hover:text-blue-600"
+              >
+                Connect GitHub
+              </a>
+            </li>
+            <li>
+              <Link href="/pricing" className="hover:text-blue-600">
+                Pricing
+              </Link>
+            </li>
+            <li>
+              <Link href="/support" className="hover:text-blue-600">
+                Support
+              </Link>
+            </li>
+          </ul>
+        </nav>
         
         {/* RECHTS: Credits und Profilbild */}
         <div className="flex items-center gap-4">
