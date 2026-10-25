@@ -31,57 +31,61 @@ function WorkspaceBody() {
   // Dialog und GitHub-Repositories
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [repositories, setRepositories] = useState<GitHubRepository[]>([]);
+  const [repositorySearch, setRepositorySearch] = useState('');
 
   // Ausgewähltes Repository
-  const [selectedRepository, setSelectedRepository] =
-    useState<GitHubRepository | null>(null);
+  const [savedRepositories, setSavedRepositories] = useState<SavedRepository[]>([]);
+  const [isLoadingSaved, setIsLoadingSaved] = useState(true);
+  const [removingRepositoryId, setRemovingRepositoryId] = useState<string | null>(null);
 
   // Lade- und Fehlerzustände
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
+  const filteredRepositories = repositories.filter((repository) => {
+  const search = repositorySearch.trim().toLowerCase();
+
+  if (!search) {
+    return true;
+  }
+
+  return (
+    repository.name.toLowerCase().includes(search) ||
+    repository.full_name.toLowerCase().includes(search) ||
+    repository.description?.toLowerCase().includes(search)
+  );
+});
 
   // Bereits gespeicherte Repositories beim Öffnen der Seite laden
   useEffect(() => {
     async function loadSavedRepositories() {
+      setIsLoadingSaved(true);
+
       try {
         const response = await fetch('/api/repositories', {
           cache: 'no-store',
         });
 
         if (!response.ok) {
-          if (response.status !== 401) {
-            console.error(
-              'Gespeicherte Repositories konnten nicht geladen werden.'
-            );
-          }
-          return;
+          throw new Error('Could not load saved repositories.');
         }
 
-        const savedRepositories: SavedRepository[] = await response.json();
-
-        if (savedRepositories.length > 0) {
-          const repository = savedRepositories[0];
-
-          setSelectedRepository({
-            id: repository.repoId,
-            name: repository.name,
-            full_name: repository.fullName,
-            description: repository.description,
-            private: repository.private,
-            html_url: repository.htmlUrl,
-          });
-        }
+        const data: SavedRepository[] = await response.json();
+        setSavedRepositories(data);
       } catch (err) {
-        console.error(
-          'Fehler beim Laden gespeicherter Repositories:',
-          err
+        console.error('Failed to load saved repositories:', err);
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'An unexpected error occurred.'
         );
+      } finally {
+        setIsLoadingSaved(false);
       }
     }
 
-    loadSavedRepositories();
+    void loadSavedRepositories();
   }, []);
 
   // GitHub-Repositories laden und den Dialog öffnen
@@ -99,8 +103,8 @@ function WorkspaceBody() {
       if (!response.ok) {
         throw new Error(
           response.status === 401
-            ? 'Bitte verbinde zuerst deinen GitHub-Account.'
-            : 'Die GitHub-Repositories konnten nicht geladen werden.'
+            ? 'Please connect your GitHub account first.'
+            : 'The GitHub repositories could not be loaded.'
         );
       }
 
@@ -110,7 +114,7 @@ function WorkspaceBody() {
       setError(
         err instanceof Error
           ? err.message
-          : 'Ein unerwarteter Fehler ist aufgetreten.'
+          : 'An unexpected error occurred.'
       );
     } finally {
       setIsLoading(false);
@@ -145,27 +149,71 @@ function WorkspaceBody() {
 
       if (!response.ok) {
         throw new Error(
-          result.error ?? 'Das Repository konnte nicht gespeichert werden.'
+          result.error ?? 'The repository could not be saved.'
         );
       }
 
-      setSelectedRepository(repository);
+      const savedResponse = await fetch('/api/repositories', {
+        cache: 'no-store',
+      });
+
+      if (!savedResponse.ok) {
+        throw new Error('Could not refresh saved repositories.');
+      }
+
+      const savedData: SavedRepository[] = await savedResponse.json();
+      setSavedRepositories(savedData);
       setIsDialogOpen(false);
       setSaveMessage(
-        result.message === 'Repository bereits gespeichert'
-          ? 'Dieses Repository ist bereits gespeichert.'
-          : 'Repository erfolgreich gespeichert.'
+        result.message === 'Repository already saved.'
+          ? 'This repository is already saved.'
+          : 'Repository successfully saved.'
       );
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : 'Ein unerwarteter Fehler ist aufgetreten.'
+          : 'An unexpected error occurred.'
       );
     } finally {
       setIsSaving(false);
     }
   }
+  async function removeRepository(repository: SavedRepository) {
+  if (removingRepositoryId) {
+    return;
+  }
+
+  setRemovingRepositoryId(repository.id);
+  setError('');
+  setSaveMessage('');
+
+  try {
+    const response = await fetch(
+      `/api/repositories?id=${encodeURIComponent(repository.id)}`,
+      { method: 'DELETE' }
+    );
+    const result: { error?: string; message?: string } =
+      await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error ?? 'Could not remove repository.');
+    }
+
+    setSavedRepositories((current) =>
+      current.filter((item) => item.id !== repository.id)
+    );
+    setSaveMessage(result.message ?? 'Repository removed from your workspace.');
+  } catch (err) {
+    setError(
+      err instanceof Error
+        ? err.message
+        : 'An unexpected error occurred.'
+    );
+  } finally {
+    setRemovingRepositoryId(null);
+  }
+}
 
   return (
     <div className="mx-auto mt-10 max-w-4xl">
@@ -228,29 +276,58 @@ function WorkspaceBody() {
           </p>
         )}
 
-        {/* Ausgewähltes Repository */}
-        {selectedRepository && (
-          <div className="mt-6 w-full rounded-lg border border-gray-200 p-4 text-left">
-            <p className="mb-1 text-sm text-gray-500">
-              Selected Repository
-            </p>
-
-            <a
-              href={selectedRepository.html_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="font-semibold text-blue-700 hover:underline"
-            >
-              {selectedRepository.full_name}
-            </a>
-
-            <p className="mt-1 text-sm text-gray-500">
-              {selectedRepository.private
-                ? 'Private repository'
-                : 'Public repository'}
-            </p>
+        <div className="mt-8 w-full text-left">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-xl font-semibold text-gray-900">
+              Saved Repositories
+            </h3>
+            <span className="text-sm text-gray-500">
+              {savedRepositories.length}
+            </span>
           </div>
-        )}
+
+          {isLoadingSaved ? (
+            <p className="text-sm text-gray-500" role="status">
+              Loading saved repositories...
+            </p>
+          ) : savedRepositories.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-gray-300 p-5 text-sm text-gray-500">
+              You have not added any repositories yet.
+            </p>
+          ) : (
+            <ul className="space-y-3">
+              {savedRepositories.map((repository) => (
+                <li
+                  key={repository.id}
+                  className="flex items-center justify-between gap-4 rounded-lg border border-gray-200 p-4"
+                >
+                  <div className="min-w-0">
+                    <a
+                      href={repository.htmlUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="break-all font-semibold text-blue-700 hover:underline"
+                    >
+                      {repository.fullName}
+                    </a>
+                    <p className="mt-1 text-sm text-gray-500">
+                      {repository.private ? 'Private repository' : 'Public repository'}
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => removeRepository(repository)}
+                    disabled={removingRepositoryId !== null}
+                    className="shrink-0 rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {removingRepositoryId === repository.id ? 'Removing...' : 'Remove'}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
 
       {/* Repository-Auswahldialog */}
@@ -272,23 +349,36 @@ function WorkspaceBody() {
           >
             {/* Dialog-Kopfzeile */}
             <div className="flex items-center justify-between border-b p-5">
-              <h3
-                id="repository-dialog-title"
-                className="text-xl font-semibold"
-              >
-                Select a Repository
-              </h3>
+              {!isLoading && !error && repositories.length > 0 && (
+                <div className="border-b border-gray-200 p-4">
+                  <label
+                    htmlFor="repository-search"
+                    className="mb-2 block text-sm font-medium text-gray-700"
+                  >
+                    Search Repositories
+                  </label>
+                  <input
+                    id="repository-search"
+                    type="search"
+                    value={repositorySearch}
+                    onChange={(event) => setRepositorySearch(event.target.value)}
+                    placeholder="Name or description"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                  />
+                </div>
+              )}
 
               <button
                 type="button"
                 onClick={() => setIsDialogOpen(false)}
                 disabled={isSaving}
                 className="text-2xl text-gray-500 hover:text-black disabled:opacity-50"
-                aria-label="Dialog schließen"
+                aria-label="Close dialog"
               >
                 &times;
               </button>
             </div>
+            
 
             {/* Dialog-Inhalt */}
             <div className="overflow-y-auto p-5">
@@ -314,7 +404,7 @@ function WorkspaceBody() {
 
               {!isLoading && !error && repositories.length > 0 && (
                 <div className="space-y-3">
-                  {repositories.map((repository) => (
+                  {filteredRepositories.map((repository) => (
                     <button
                       key={repository.id}
                       type="button"
@@ -348,9 +438,18 @@ function WorkspaceBody() {
                 </div>
               )}
 
-              {!isLoading && !error && repositories.length === 0 && (
+            {!isLoading && !error && repositories.length === 0 && (
+              <p className="py-6 text-center text-gray-500">
+                No repositories found.
+              </p>
+            )}
+
+            {!isLoading &&
+              !error &&
+              repositories.length > 0 &&
+              filteredRepositories.length === 0 && (
                 <p className="py-6 text-center text-gray-500">
-                  No repositories found!
+                  No repositories found.
                 </p>
               )}
             </div>

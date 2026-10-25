@@ -145,3 +145,51 @@ export async function POST(request: Request) {
     );
   }
 }
+
+export async function DELETE(request: Request) {
+  const { userId } = await auth();
+
+  if (!userId) {
+    return NextResponse.json(
+      { error: "You must be signed in." },
+      { status: 401 }
+    );
+  }
+
+  const repositoryId = new URL(request.url).searchParams.get("id");
+
+  if (!repositoryId) {
+    return NextResponse.json(
+      { error: "A repository ID is required." },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const deleted = await db
+      .delete(repositories)
+      .where(
+        and(
+          eq(repositories.id, repositoryId),
+          eq(repositories.userId, userId)
+        )
+      )
+      .returning({ id: repositories.id });
+
+    if (deleted.length === 0) {
+      return NextResponse.json(
+        { error: "Repository not found." },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json({ message: "Repository removed." });
+  } catch (error) {
+    console.error("Failed to remove repository:", error);
+
+    return NextResponse.json(
+      { error: "Could not remove repository." },
+      { status: 500 }
+    );
+  }
+} 
