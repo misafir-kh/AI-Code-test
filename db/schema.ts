@@ -24,5 +24,7 @@ export const repositories = pgTable("repository", {
   htmlUrl: text("html_url").notNull(),
   description: text("description"),
   owner: text("owner").notNull(),
+  targetUrl: text("target_url"),
+  testInstructions: text("test_instructions"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

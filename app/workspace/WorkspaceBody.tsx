@@ -23,6 +23,8 @@ interface SavedRepository {
   htmlUrl: string;
   description: string | null;
   owner: string;
+  targetUrl: string | null;
+  testInstructions: string | null;
   createdAt: string;
 }
 
@@ -37,6 +39,11 @@ function WorkspaceBody() {
   const [savedRepositories, setSavedRepositories] = useState<SavedRepository[]>([]);
   const [isLoadingSaved, setIsLoadingSaved] = useState(true);
   const [removingRepositoryId, setRemovingRepositoryId] = useState<string | null>(null);
+  const [editingRepository, setEditingRepository] =
+  useState<SavedRepository | null>(null);
+  const [targetUrl, setTargetUrl] = useState('');
+  const [testInstructions, setTestInstructions] = useState('');
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   // Lade- und Fehlerzustände
   const [isLoading, setIsLoading] = useState(false);
@@ -215,6 +222,71 @@ function WorkspaceBody() {
   }
 }
 
+  async function saveRepositorySettings() {
+    if (!editingRepository || isSavingSettings) {
+      return;
+    }
+
+    setIsSavingSettings(true);
+    setError('');
+    setSaveMessage('');
+
+    try {
+      const response = await fetch('/api/repositories', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          id: editingRepository.id,
+          targetUrl,
+          testInstructions,
+        }),
+      });
+
+      const result: { error?: string; message?: string } =
+        await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error ?? 'Could not save repository settings.');
+      }
+
+      const savedTargetUrl = targetUrl.trim() || null;
+      const savedInstructions = testInstructions.trim() || null;
+
+      setSavedRepositories((current) =>
+        current.map((repository) =>
+          repository.id === editingRepository.id
+            ? {
+                ...repository,
+                targetUrl: savedTargetUrl,
+                testInstructions: savedInstructions,
+              }
+            : repository
+        )
+      );
+
+      setEditingRepository(null);
+      setSaveMessage(result.message ?? 'Repository settings saved.');
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'An unexpected error occurred.'
+      );
+    } finally {
+      setIsSavingSettings(false);
+    }
+  }
+
+  function openRepositorySettings(repository: SavedRepository) {
+    setEditingRepository(repository);
+    setTargetUrl(repository.targetUrl ?? '');
+    setTestInstructions(repository.testInstructions ?? '');
+    setError('');
+    setSaveMessage('');
+  }
+
   return (
     <div className="mx-auto mt-10 max-w-4xl">
       <div className="mb-8">
@@ -315,20 +387,126 @@ function WorkspaceBody() {
                     </p>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => removeRepository(repository)}
-                    disabled={removingRepositoryId !== null}
-                    className="shrink-0 rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {removingRepositoryId === repository.id ? 'Removing...' : 'Remove'}
-                  </button>
+                  <div className="flex shrink-0 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openRepositorySettings(repository)}
+                      className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                      Settings
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => removeRepository(repository)}
+                      disabled={removingRepositoryId !== null}
+                      className="rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {removingRepositoryId === repository.id ? 'Removing...' : 'Remove'}
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
           )}
         </div>
       </div>
+
+            {editingRepository && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => {
+            if (!isSavingSettings) {
+              setEditingRepository(null);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="repository-settings-title"
+            className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2
+              id="repository-settings-title"
+              className="text-xl font-semibold text-gray-900"
+            >
+              Repository settings
+            </h2>
+            <p className="mt-1 text-sm text-gray-600">
+              {editingRepository.fullName}
+            </p>
+
+            <div className="mt-5 space-y-4">
+              <div>
+                <label
+                  htmlFor="repository-target-url"
+                  className="mb-1 block text-sm font-medium text-gray-700"
+                >
+                  Target URL
+                </label>
+                <input
+                  id="repository-target-url"
+                  type="url"
+                  value={targetUrl}
+                  onChange={(event) => setTargetUrl(event.target.value)}
+                  placeholder="https://your-staging-site.com"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  The website where tests will eventually run.
+                </p>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="repository-test-instructions"
+                  className="mb-1 block text-sm font-medium text-gray-700"
+                >
+                  Test instructions
+                </label>
+                <textarea
+                  id="repository-test-instructions"
+                  value={testInstructions}
+                  onChange={(event) => setTestInstructions(event.target.value)}
+                  rows={5}
+                  placeholder="For example: focus on the sign-in flow and form validation."
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Optional guidance for generating tests for this repository.
+                </p>
+              </div>
+            </div>
+
+            {error && (
+              <p className="mt-4 text-sm text-red-600" role="alert">
+                {error}
+              </p>
+            )}
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setEditingRepository(null)}
+                disabled={isSavingSettings}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={saveRepositorySettings}
+                disabled={isSavingSettings}
+                className="rounded-lg bg-black px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isSavingSettings ? 'Saving...' : 'Save settings'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Repository-Auswahldialog */}
       {isDialogOpen && (
