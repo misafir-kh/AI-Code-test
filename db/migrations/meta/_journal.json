@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1793148565646,
+      "tag": "0000_add-repository-test-settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1793490677938,
+      "tag": "0001_add-repository-test-settings",
+      "breakpoints": true
+    }
+  ]
+}

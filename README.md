@@ -16,9 +16,54 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Browser tests
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The workspace generates structured browser tests from the selected GitHub
+repository. You can select multiple tests, run them sequentially, inspect the
+pass rate, and open the Browserbase recording for each cloud run.
+
+### Browserbase cloud runs
+
+Copy `.env.example` to `.env.local` and add `BROWSERBASE_API_KEY`. A cloud run
+can test any reachable HTTP(S) target URL. Browserbase creates and records a
+separate cloud browser session for every test; the workspace saves a link to
+that session after the run.
+
+### Local development fallback
+
+When `BROWSERBASE_API_KEY` is absent, the app only runs against `localhost`,
+`127.0.0.1`, or `::1` and blocks third-party browser requests. Install the
+browser once:
+
+   ```bash
+   npx playwright install chromium
+   ```
+
+Start the website you want to test, for example at
+   [http://localhost:3000](http://localhost:3000).
+Start this project with `npm run dev`, sign in, and open the workspace.
+Configure the repository's **Target URL** to the running website's address.
+Generate or open a test case, choose **Edit steps**, add browser actions,
+   and save. Supported actions are navigation, clicking/filling accessible
+   elements, and checking visible text or elements. If no steps are saved yet,
+   **Run test** creates a structured plan automatically before running it.
+Choose **Run test** to see the Passed/Failed status and the latest run log.
+
+The test runner does not execute AI-generated code. It only runs the
+structured browser actions saved with each test case.
+
+### Database fields
+
+The test runner needs `test_steps`, `last_run_status`, `last_run_logs`, and
+`last_run_at` on `test_case`. Browserbase runs additionally need
+`last_run_browserbase_session_id` and `last_run_browserbase_session_url`. If
+these columns are not already present on the
+database branch used by the app, apply
+[`db/manual-migrations/0001_create_test_case.sql`](./db/manual-migrations/0001_create_test_case.sql),
+[`db/manual-migrations/0002_add_test_execution_fields.sql`](./db/manual-migrations/0002_add_test_execution_fields.sql), and
+[`db/manual-migrations/0003_add_browserbase_session_fields.sql`](./db/manual-migrations/0003_add_browserbase_session_fields.sql)
+to that development branch. Do not apply it to production without reviewing
+the target branch first.
 
 ## Learn More
 
