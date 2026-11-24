@@ -146,6 +146,81 @@ export async function POST(request: Request) {
   }
 }
 
+export async function PATCH(request: Request) {
+  const { userId } = await auth();
+
+  if (!userId) {
+    return NextResponse.json(
+      { error: "You must be signed in." },
+      { status: 401 }
+    );
+  }
+
+  try {
+    const body = await request.json();
+    const { id, targetUrl, testInstructions } = body;
+
+    if (
+      typeof id !== "string" ||
+      !(typeof targetUrl === "string" || targetUrl === null) ||
+      !(typeof testInstructions === "string" || testInstructions === null)
+    ) {
+      return NextResponse.json(
+        { error: "Invalid repository settings." },
+        { status: 400 }
+      );
+    }
+
+    const normalizedTargetUrl = targetUrl.trim() || null;
+    const normalizedInstructions = testInstructions.trim() || null;
+
+    if (normalizedTargetUrl) {
+      try {
+        const url = new URL(normalizedTargetUrl);
+
+        if (url.protocol !== "http:" && url.protocol !== "https:") {
+          throw new Error("Unsupported URL protocol.");
+        }
+      } catch {
+        return NextResponse.json(
+          { error: "Enter a valid HTTP or HTTPS URL." },
+          { status: 400 }
+        );
+      }
+    }
+
+    const updated = await db
+      .update(repositories)
+      .set({
+        targetUrl: normalizedTargetUrl,
+        testInstructions: normalizedInstructions,
+      })
+      .where(
+        and(
+          eq(repositories.id, id),
+          eq(repositories.userId, userId)
+        )
+      )
+      .returning({ id: repositories.id });
+
+    if (updated.length === 0) {
+      return NextResponse.json(
+        { error: "Repository not found." },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json({ message: "Repository settings saved." });
+  } catch (error) {
+    console.error("Failed to update repository settings:", error);
+
+    return NextResponse.json(
+      { error: "Could not save repository settings." },
+      { status: 500 }
+    );
+  }
+}
+
 export async function DELETE(request: Request) {
   const { userId } = await auth();
 

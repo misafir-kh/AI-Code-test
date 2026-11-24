@@ -1,39 +1,91 @@
+import { auth } from "@clerk/nextjs/server";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
-export async function GET() {
-  // GitHub-Token aus dem HTTP-only-Cookie lesen
-  const cookieStore = await cookies();
-  const token = cookieStore.get("github_token")?.value;
+import { getGitHubTokenForUser } from "@/lib/github-auth";
 
-  // Prüfen, ob der Nutzer GitHub verbunden hat
-  if (!token) {
+export async function GET() {
+  const { userId } = await auth();
+
+  if (!userId) {
     return NextResponse.json(
-      { error: "GitHub is not connected" },
+      { error: "Bitte melde dich zuerst an." },
       { status: 401 }
     );
   }
 
-  // Repositories über die GitHub-API abrufen
-  const response = await fetch("https://api.github.com/user/repos?sort=updated&per_page=100", {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-    cache: "no-store",
-  });
+  const cookieStore = await cookies();
+  const hasToken = Boolean(cookieStore.get("github_token")?.value);
+  const token = await getGitHubTokenForUser(userId);
 
-  // Fehler der GitHub-API weitergeben
-  if (!response.ok) {
+  if (!token) {
+    const response = NextResponse.json(
+      { error: "Bitte verbinde zuerst dein GitHub-Konto." },
+      { status: 401 }
+    );
+    if (hasToken) {
+      response.cookies.delete("github_token");
+      response.cookies.delete("github_clerk_user");
+    }
+    return response;
+  }
+
+  let githubResponse: Response;
+
+  try {
+    githubResponse = await fetch(
+      "https://api.github.com/user/repos?sort=updated&per_page=100",
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+        cache: "no-store",
+        signal: AbortSignal.timeout(10000),
+      }
+    );
+  } catch (error) {
+    console.error("GitHub repository request failed:", error);
     return NextResponse.json(
-      { error: "Failed to fetch GitHub repositories" },
-      { status: response.status }
+      { error: "GitHub ist gerade nicht erreichbar. Bitte versuche es erneut." },
+      { status: 502 }
     );
   }
 
-  // Repositories als JSON zurückgeben
-  const repos = await response.json();
+  if (githubResponse.status === 401) {
+    const response = NextResponse.json(
+      { error: "Deine GitHub-Verbindung ist abgelaufen. Bitte verbinde sie erneut." },
+      { status: 401 }
+    );
+    response.cookies.delete("github_token");
+    response.cookies.delete("github_clerk_user");
+    return response;
+  }
 
-  return NextResponse.json(repos);
+  if (githubResponse.status === 403 || githubResponse.status === 429) {
+    return NextResponse.json(
+      {
+        error:
+          githubResponse.headers.get("x-ratelimit-remaining") === "0"
+            ? "Das GitHub-API-Limit ist erreicht. Bitte warte kurz und versuche es erneut."
+            : "GitHub verweigert den Repository-Zugriff. Prüfe die Berechtigungen deiner Verbindung.",
+      },
+      { status: githubResponse.status }
+    );
+  }
+
+  if (!githubResponse.ok) {
+    console.error(
+      "GitHub repository request failed:",
+      githubResponse.status
+    );
+    return NextResponse.json(
+      { error: "GitHub-Repositories konnten nicht geladen werden." },
+      { status: 502 }
+    );
+  }
+
+  const repositories: unknown = await githubResponse.json();
+  return NextResponse.json(repositories);
 }

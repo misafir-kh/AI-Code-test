@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import TestCaseCard, { type TestCase } from './TestCaseCard';
 
 // Struktur eines GitHub-Repositories
 interface GitHubRepository {
@@ -23,6 +24,8 @@ interface SavedRepository {
   htmlUrl: string;
   description: string | null;
   owner: string;
+  targetUrl: string | null;
+  testInstructions: string | null;
   createdAt: string;
 }
 
@@ -37,12 +40,23 @@ function WorkspaceBody() {
   const [savedRepositories, setSavedRepositories] = useState<SavedRepository[]>([]);
   const [isLoadingSaved, setIsLoadingSaved] = useState(true);
   const [removingRepositoryId, setRemovingRepositoryId] = useState<string | null>(null);
+  const [editingRepository, setEditingRepository] =
+  useState<SavedRepository | null>(null);
+  const [targetUrl, setTargetUrl] = useState('');
+  const [testInstructions, setTestInstructions] = useState('');
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   // Lade- und Fehlerzustände
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
+  const [testCasesByRepository, setTestCasesByRepository] =
+  useState<Record<string, TestCase[]>>({});
+  const [generatingRepositoryId, setGeneratingRepositoryId] =
+  useState<string | null>(null);
+  const [selectedTestCaseIds, setSelectedTestCaseIds] = useState<string[]>([]);
+  const [runningRepositoryId, setRunningRepositoryId] = useState<string | null>(null);
   const filteredRepositories = repositories.filter((repository) => {
   const search = repositorySearch.trim().toLowerCase();
 
@@ -57,6 +71,111 @@ function WorkspaceBody() {
   );
 });
 
+function updateTestCase(repositoryId: string, updatedTestCase: TestCase) {
+  setTestCasesByRepository((current) => ({
+    ...current,
+    [repositoryId]: (current[repositoryId] ?? []).map((testCase) =>
+      testCase.id === updatedTestCase.id ? updatedTestCase : testCase
+    ),
+  }));
+}
+
+function toggleTestCaseSelection(testCaseId: string, checked: boolean) {
+  setSelectedTestCaseIds((current) =>
+    checked
+      ? [...new Set([...current, testCaseId])]
+      : current.filter((id) => id !== testCaseId)
+  );
+}
+
+async function runSelectedTestCases(repository: SavedRepository) {
+  const selected = (testCasesByRepository[repository.id] ?? []).filter((testCase) =>
+    selectedTestCaseIds.includes(testCase.id)
+  );
+
+  if (selected.length === 0 || runningRepositoryId) return;
+
+  setRunningRepositoryId(repository.id);
+  setError('');
+  setSaveMessage('');
+
+  let passed = 0;
+  let failed = 0;
+
+  try {
+    for (const testCase of selected) {
+      const response = await fetch(
+        `/api/repositories/${encodeURIComponent(repository.id)}/test-cases/${encodeURIComponent(testCase.id)}/run`,
+        { method: 'POST' }
+      );
+      const result: { error?: string; testCase?: TestCase } = await response.json();
+
+      if (result.testCase) {
+        updateTestCase(repository.id, result.testCase);
+        if (result.testCase.lastRunStatus === 'passed') passed += 1;
+        else failed += 1;
+      } else {
+        failed += 1;
+      }
+
+      if (!response.ok && !result.testCase) {
+        throw new Error(result.error ?? `Testfall „${testCase.title}“ konnte nicht ausgeführt werden.`);
+      }
+    }
+
+    setSaveMessage(`${passed} bestanden, ${failed} fehlgeschlagen.`);
+  } catch (err) {
+    setError(err instanceof Error ? err.message : 'Die ausgewählten Testfälle konnten nicht ausgeführt werden.');
+  } finally {
+    setRunningRepositoryId(null);
+  }
+}
+
+async function generateTestCases(repository: SavedRepository) {
+  if (generatingRepositoryId !== null) {
+    return;
+  }
+
+  setGeneratingRepositoryId(repository.id);
+  setError('');
+  setSaveMessage('');
+
+  try {
+    const response = await fetch(
+      `/api/repositories/${encodeURIComponent(repository.id)}/test-cases/generate-test-cases`,
+      { method: 'POST' }
+    );
+
+    const result: {
+      error?: string;
+      testCases?: TestCase[];
+    } = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error ?? "Testfälle konnten nicht erstellt werden.");
+    }
+
+    if (!Array.isArray(result.testCases)) {
+      throw new Error("Der Server hat keine Testfälle zurückgegeben.");
+    }
+
+    setTestCasesByRepository((current) => ({
+      ...current,
+      [repository.id]: result.testCases!,
+    }));
+
+    setSaveMessage(`${result.testCases.length} Testfälle wurden erstellt.`);
+  } catch (err) {
+    setError(
+      err instanceof Error
+        ? err.message
+        : 'An unexpected error occurred.'
+    );
+  } finally {
+    setGeneratingRepositoryId(null);
+  }
+}
+
   // Bereits gespeicherte Repositories beim Öffnen der Seite laden
   useEffect(() => {
     async function loadSavedRepositories() {
@@ -68,17 +187,36 @@ function WorkspaceBody() {
         });
 
         if (!response.ok) {
-          throw new Error('Could not load saved repositories.');
+          throw new Error("Repositorys konnten nicht geladen werden.");
         }
 
         const data: SavedRepository[] = await response.json();
         setSavedRepositories(data);
+        const testCaseEntries = await Promise.all(
+          data.map(async (repository) => {
+            const response = await fetch(
+              `/api/repositories/${encodeURIComponent(repository.id)}/test-cases`,
+              { cache: 'no-store' }
+            );
+
+            if (!response.ok) {
+              throw new Error(
+                `Testfälle für ${repository.fullName} konnten nicht geladen werden.`
+              );
+            }
+
+            const testCases: TestCase[] = await response.json();
+            return [repository.id, testCases] as const;
+          })
+        );
+
+        setTestCasesByRepository(Object.fromEntries(testCaseEntries));
       } catch (err) {
         console.error('Failed to load saved repositories:', err);
         setError(
           err instanceof Error
             ? err.message
-            : 'An unexpected error occurred.'
+            : "Ein unerwarteter Fehler ist aufgetreten."
         );
       } finally {
         setIsLoadingSaved(false);
@@ -103,8 +241,8 @@ function WorkspaceBody() {
       if (!response.ok) {
         throw new Error(
           response.status === 401
-            ? 'Please connect your GitHub account first.'
-            : 'The GitHub repositories could not be loaded.'
+            ? "Bitte verbinde zuerst dein GitHub-Konto."
+            : "GitHub-Repositorys konnten nicht geladen werden."
         );
       }
 
@@ -149,7 +287,7 @@ function WorkspaceBody() {
 
       if (!response.ok) {
         throw new Error(
-          result.error ?? 'The repository could not be saved.'
+          result.error ?? "Das Repository konnte nicht gespeichert werden."
         );
       }
 
@@ -158,7 +296,7 @@ function WorkspaceBody() {
       });
 
       if (!savedResponse.ok) {
-        throw new Error('Could not refresh saved repositories.');
+        throw new Error("Die Repository-Liste konnte nicht aktualisiert werden.");
       }
 
       const savedData: SavedRepository[] = await savedResponse.json();
@@ -166,8 +304,8 @@ function WorkspaceBody() {
       setIsDialogOpen(false);
       setSaveMessage(
         result.message === 'Repository already saved.'
-          ? 'This repository is already saved.'
-          : 'Repository successfully saved.'
+          ? "Dieses Repository ist bereits gespeichert."
+          : "Repository wurde hinzugefügt."
       );
     } catch (err) {
       setError(
@@ -197,13 +335,13 @@ function WorkspaceBody() {
       await response.json();
 
     if (!response.ok) {
-      throw new Error(result.error ?? 'Could not remove repository.');
+      throw new Error(result.error ?? "Repository konnte nicht entfernt werden.");
     }
 
     setSavedRepositories((current) =>
       current.filter((item) => item.id !== repository.id)
     );
-    setSaveMessage(result.message ?? 'Repository removed from your workspace.');
+    setSaveMessage(result.message ?? "Repository wurde aus dem Workspace entfernt.");
   } catch (err) {
     setError(
       err instanceof Error
@@ -215,32 +353,104 @@ function WorkspaceBody() {
   }
 }
 
+  async function saveRepositorySettings() {
+    if (!editingRepository || isSavingSettings) {
+      return;
+    }
+
+    setIsSavingSettings(true);
+    setError('');
+    setSaveMessage('');
+
+    try {
+      const response = await fetch('/api/repositories', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          id: editingRepository.id,
+          targetUrl,
+          testInstructions,
+        }),
+      });
+
+      const result: { error?: string; message?: string } =
+        await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error ?? "Repository-Einstellungen konnten nicht gespeichert werden.");
+      }
+
+      const savedTargetUrl = targetUrl.trim() || null;
+      const savedInstructions = testInstructions.trim() || null;
+
+      setSavedRepositories((current) =>
+        current.map((repository) =>
+          repository.id === editingRepository.id
+            ? {
+                ...repository,
+                targetUrl: savedTargetUrl,
+                testInstructions: savedInstructions,
+              }
+            : repository
+        )
+      );
+
+      setEditingRepository(null);
+      setSaveMessage(result.message ?? "Repository-Einstellungen gespeichert.");
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Ein unerwarteter Fehler ist aufgetreten."
+      );
+    } finally {
+      setIsSavingSettings(false);
+    }
+  }
+
+  function openRepositorySettings(repository: SavedRepository) {
+    setEditingRepository(repository);
+    setTargetUrl(repository.targetUrl ?? '');
+    setTestInstructions(repository.testInstructions ?? '');
+    setError('');
+    setSaveMessage('');
+  }
+
   return (
-    <div className="mx-auto mt-10 max-w-4xl">
-      <div className="mb-8">
-        <h2 className="mt-2 text-3xl font-bold tracking-tight text-gray-900">
+    <div className="mx-auto max-w-5xl">
+      <div className="mb-7">
+        <p className="text-sm font-semibold text-blue-700">Übersicht</p>
+        <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-950">
           Workspace
-        </h2>
-        <p className="mt-2 text-gray-600">
-          Manage your repositories and prepare them for AI-powered testing.
+        </h1>
+        <p className="mt-2 text-sm text-slate-600">
+          Repositorys verwalten und Browser-Tests ausführen.
         </p>
       </div>
 
       {/* GitHub-Verbindung und Repository-Auswahl */}
-      <div className="mt-8 flex flex-col items-center justify-center rounded-xl border border-gray-100 bg-white p-8 text-center shadow-sm">
-        <h3 className="mb-2 text-2xl font-semibold">
-          Connect GitHub &amp; Add Repository
-        </h3>
-
-        <p className="mb-6 text-gray-500">
-          Connect your GitHub account to add repositories and generate AI-powered tests for your code.
-        </p>
+      <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-950">
+              Deine Repositorys
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Verbundene Projekte und ihre Testfälle.
+            </p>
+          </div>
+          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+            {savedRepositories.length}
+          </span>
+        </div>
 
         <button
           type="button"
           onClick={openRepositoryDialog}
           disabled={isSaving}
-          className="flex items-center gap-2 rounded-lg bg-black px-6 py-3 font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex items-center gap-2 rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <svg
             className="h-5 w-5"
@@ -254,81 +464,261 @@ function WorkspaceBody() {
               clipRule="evenodd"
             />
           </svg>
-          + Add Repository
+          Repository hinzufügen
         </button>
 
         {/* Speicherstatus */}
         {isSaving && (
-          <p className="mt-4 text-sm text-gray-500" role="status">
-            Saving repository...
+          <p className="mt-4 text-sm text-slate-500" role="status">
+            Repository wird gespeichert …
           </p>
         )}
 
         {saveMessage && (
-          <p className="mt-4 text-sm text-green-700" role="status">
-            {saveMessage}
-          </p>
+          <div className="mt-4 flex items-start justify-between gap-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+            <p role="status">{saveMessage}</p>
+            <button
+              type="button"
+              onClick={() => setSaveMessage("")}
+              aria-label="Erfolgsmeldung schließen"
+              className="-mr-1 -mt-1 rounded p-1 text-emerald-700 hover:bg-emerald-100"
+            >
+              &times;
+            </button>
+          </div>
         )}
 
-        {error && !isDialogOpen && (
-          <p className="mt-4 text-sm text-red-600" role="alert">
+        {error && !isDialogOpen && !editingRepository && (
+          <p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700" role="alert">
             {error}
           </p>
         )}
 
-        <div className="mt-8 w-full text-left">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-xl font-semibold text-gray-900">
-              Saved Repositories
-            </h3>
-            <span className="text-sm text-gray-500">
-              {savedRepositories.length}
-            </span>
-          </div>
-
+        <div className="mt-6 w-full text-left">
           {isLoadingSaved ? (
-            <p className="text-sm text-gray-500" role="status">
-              Loading saved repositories...
+            <p className="text-sm text-slate-500" role="status">
+              Repositorys werden geladen …
             </p>
           ) : savedRepositories.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-gray-300 p-5 text-sm text-gray-500">
-              You have not added any repositories yet.
-            </p>
+            <div className="rounded-xl border border-dashed border-slate-300 px-5 py-10 text-center">
+              <p className="font-medium text-slate-800">
+                Noch keine Repositorys hinzugefügt
+              </p>
+              <p className="mt-1 text-sm text-slate-500">
+                Füge ein Repository hinzu, um passende Testfälle zu erstellen.
+              </p>
+            </div>
           ) : (
             <ul className="space-y-3">
               {savedRepositories.map((repository) => (
                 <li
                   key={repository.id}
-                  className="flex items-center justify-between gap-4 rounded-lg border border-gray-200 p-4"
+                  className="flex flex-col gap-4 rounded-xl border border-slate-200 p-4 sm:p-5"
                 >
-                  <div className="min-w-0">
-                    <a
-                      href={repository.htmlUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="break-all font-semibold text-blue-700 hover:underline"
-                    >
-                      {repository.fullName}
-                    </a>
-                    <p className="mt-1 text-sm text-gray-500">
-                      {repository.private ? 'Private repository' : 'Public repository'}
-                    </p>
+                  <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+                    <div className="min-w-0">
+                      <a
+                        href={repository.htmlUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="break-all font-semibold text-blue-700 hover:underline"
+                      >
+                        {repository.fullName}
+                      </a>
+                      <p className="mt-1 text-sm text-slate-500">
+                        {repository.private ? "Privat" : "Öffentlich"}
+                        {repository.targetUrl ? ` · ${repository.targetUrl}` : ""}
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openRepositorySettings(repository)}
+                        className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        Einstellungen
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => generateTestCases(repository)}
+                        disabled={generatingRepositoryId !== null}
+                        className="rounded-lg bg-slate-950 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {generatingRepositoryId === repository.id
+                          ? "Tests werden erstellt …"
+                          : "Tests generieren"}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => removeRepository(repository)}
+                        disabled={removingRepositoryId !== null}
+                        className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 hover:border-red-200 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {removingRepositoryId === repository.id
+                          ? "Wird entfernt …"
+                          : "Entfernen"}
+                      </button>
+                    </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => removeRepository(repository)}
-                    disabled={removingRepositoryId !== null}
-                    className="shrink-0 rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {removingRepositoryId === repository.id ? 'Removing...' : 'Remove'}
-                  </button>
+                  {testCasesByRepository[repository.id]?.length > 0 && (
+                    <div className="mt-5 space-y-3 border-t border-slate-100 pt-4">
+                      {(() => {
+                        const cases = testCasesByRepository[repository.id] ?? [];
+                        const passed = cases.filter((item) => item.lastRunStatus === 'passed').length;
+                        const failed = cases.filter((item) => item.lastRunStatus === 'failed').length;
+                        const selectedCount = cases.filter((item) => selectedTestCaseIds.includes(item.id)).length;
+                        const executed = passed + failed;
+
+                        return (
+                          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-50 p-3">
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-700">
+                              <span><strong>{cases.length}</strong> Tests</span>
+                              <span className="text-emerald-700"><strong>{passed}</strong> bestanden</span>
+                              <span className="text-red-700"><strong>{failed}</strong> fehlgeschlagen</span>
+                              <span><strong>{executed ? Math.round((passed / executed) * 100) : 0}%</strong> Pass-Rate</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void runSelectedTestCases(repository)}
+                              disabled={selectedCount === 0 || runningRepositoryId !== null}
+                              className="rounded-lg bg-blue-700 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {runningRepositoryId === repository.id
+                                ? 'Ausgewählte Tests laufen …'
+                                : `${selectedCount} ausgewählte Tests starten`}
+                            </button>
+                          </div>
+                        );
+                      })()}
+                      {testCasesByRepository[repository.id].map((testCase) => (
+                        <TestCaseCard
+                          key={testCase.id}
+                          repositoryId={repository.id}
+                          testCase={testCase}
+                          onTestCaseChange={(updatedTestCase) =>
+                            updateTestCase(repository.id, updatedTestCase)
+                          }
+                          selected={selectedTestCaseIds.includes(testCase.id)}
+                          onSelectedChange={(checked) =>
+                            toggleTestCaseSelection(testCase.id, checked)
+                          }
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {generatingRepositoryId === repository.id && (
+                    <p className="mt-4 text-sm text-slate-500" role="status">
+                      GitHub-Dateien werden analysiert und Gemini erstellt fünf
+                      passende Testfälle. Das kann kurz dauern.
+                    </p>
+                  )}
                 </li>
               ))}
             </ul>
           )}
         </div>
       </div>
+
+            {editingRepository && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => {
+            if (!isSavingSettings) {
+              setEditingRepository(null);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="repository-settings-title"
+            className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2
+              id="repository-settings-title"
+              className="text-xl font-semibold text-gray-900"
+            >
+              Repository-Einstellungen
+            </h2>
+            <p className="mt-1 text-sm text-gray-600">
+              {editingRepository.fullName}
+            </p>
+
+            <div className="mt-5 space-y-4">
+              <div>
+                <label
+                  htmlFor="repository-target-url"
+                  className="mb-1 block text-sm font-medium text-gray-700"
+                >
+                  Zieladresse der Website
+                </label>
+                <input
+                  id="repository-target-url"
+                  type="url"
+                  value={targetUrl}
+                  onChange={(event) => setTargetUrl(event.target.value)}
+                  placeholder="http://localhost:3000"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Browserbase testet veröffentlichte Zieladressen in der Cloud;
+                  ohne API-Key sind lokale Adressen verfügbar.
+                </p>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="repository-test-instructions"
+                  className="mb-1 block text-sm font-medium text-gray-700"
+                >
+                  Zusätzliche Testhinweise
+                </label>
+                <textarea
+                  id="repository-test-instructions"
+                  value={testInstructions}
+                  onChange={(event) => setTestInstructions(event.target.value)}
+                  rows={5}
+                  placeholder="Zum Beispiel: Anmeldung und Formularvalidierung prüfen."
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Optionaler Kontext für die KI-Testgenerierung.
+                </p>
+              </div>
+            </div>
+
+            {error && (
+              <p className="mt-4 text-sm text-red-600" role="alert">
+                {error}
+              </p>
+            )}
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setEditingRepository(null)}
+                disabled={isSavingSettings}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={saveRepositorySettings}
+                disabled={isSavingSettings}
+                className="rounded-lg bg-black px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isSavingSettings ? "Speichern …" : "Einstellungen speichern"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Repository-Auswahldialog */}
       {isDialogOpen && (
@@ -355,14 +745,14 @@ function WorkspaceBody() {
                     htmlFor="repository-search"
                     className="mb-2 block text-sm font-medium text-gray-700"
                   >
-                    Search Repositories
+                    Repositorys suchen
                   </label>
                   <input
                     id="repository-search"
                     type="search"
                     value={repositorySearch}
                     onChange={(event) => setRepositorySearch(event.target.value)}
-                    placeholder="Name or description"
+                    placeholder="Name oder Beschreibung"
                     className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                   />
                 </div>
@@ -373,7 +763,7 @@ function WorkspaceBody() {
                 onClick={() => setIsDialogOpen(false)}
                 disabled={isSaving}
                 className="text-2xl text-gray-500 hover:text-black disabled:opacity-50"
-                aria-label="Close dialog"
+                aria-label="                Fenster schließen"
               >
                 &times;
               </button>
@@ -384,7 +774,7 @@ function WorkspaceBody() {
             <div className="overflow-y-auto p-5">
               {isLoading && (
                 <p className="py-6 text-center text-gray-500">
-                  Loading repositories...
+                  GitHub-Repositorys werden geladen …
                 </p>
               )}
 
@@ -397,8 +787,16 @@ function WorkspaceBody() {
                     onClick={openRepositoryDialog}
                     className="mt-3 font-medium underline"
                   >
-                    Try again
+                    Erneut versuchen
                   </button>
+                  {error.toLowerCase().includes("github") && (
+                    <a
+                      href="/api/github"
+                      className="ml-4 mt-3 inline-block font-medium underline"
+                    >
+                      GitHub verbinden
+                    </a>
+                  )}
                 </div>
               )}
 
@@ -418,7 +816,7 @@ function WorkspaceBody() {
                         </span>
 
                         <span className="shrink-0 text-xs text-gray-500">
-                          {repository.private ? 'Private' : 'Public'}
+                          {repository.private ? "Privat" : "Öffentlich"}
                         </span>
                       </div>
 
@@ -430,7 +828,7 @@ function WorkspaceBody() {
 
                       {isSaving && (
                         <p className="mt-2 text-sm text-gray-500">
-                          Saving...
+                          Wird gespeichert …
                         </p>
                       )}
                     </button>
@@ -440,7 +838,7 @@ function WorkspaceBody() {
 
             {!isLoading && !error && repositories.length === 0 && (
               <p className="py-6 text-center text-gray-500">
-                No repositories found.
+                Keine Repositorys gefunden.
               </p>
             )}
 
@@ -449,7 +847,7 @@ function WorkspaceBody() {
               repositories.length > 0 &&
               filteredRepositories.length === 0 && (
                 <p className="py-6 text-center text-gray-500">
-                  No repositories found.
+                  Keine passenden Repositorys gefunden.
                 </p>
               )}
             </div>
@@ -462,7 +860,7 @@ function WorkspaceBody() {
                 disabled={isSaving}
                 className="rounded-lg border px-4 py-2 hover:bg-gray-100 disabled:opacity-50"
               >
-                Cancel
+                Abbrechen
               </button>
             </div>
           </div>
